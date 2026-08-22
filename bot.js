@@ -40,7 +40,12 @@ const client = new Client({
 // distill it into a "server glossary" (slang, jokes, tone) via Claude.
 // =====================================================================
 
-const GLOSSARY_FILE = path.join(__dirname, 'server_glossary.json');
+// Use Railway's persistent volume if available (mounted at /data), so
+// glossary/member data survives redeploys and restarts. Falls back to the
+// local project folder when running on your own machine, where /data won't exist.
+const DATA_DIR = fs.existsSync('/data') ? '/data' : __dirname;
+
+const GLOSSARY_FILE = path.join(DATA_DIR, 'server_glossary.json');
 // { "<guildId>": { glossary: "free text", updatedAt: ts, sampleCount: n } }
 let glossaryStore = loadJSON(GLOSSARY_FILE, {});
 
@@ -147,7 +152,7 @@ setInterval(() => {
 // Per-member long-term notes (separate from the server-wide glossary)
 // =====================================================================
 
-const MEMORY_FILE = path.join(__dirname, 'member_memory.json');
+const MEMORY_FILE = path.join(DATA_DIR, 'member_memory.json');
 let memory = loadJSON(MEMORY_FILE, {});
 
 function getMemberNotes(userId) {
