@@ -81,11 +81,17 @@ function bufferMessage(guildId, author, text) {
 // glossary: slang terms + meanings, recurring jokes/references, and a note
 // on general tone/energy. This runs in the background and never blocks replies.
 const DISTILL_INTERVAL_MS = 15 * 60 * 1000; // every 15 minutes
-const MIN_MESSAGES_TO_DISTILL = 30; // don't bother on a dead server
+const MIN_MESSAGES_TO_DISTILL = 10; // don't bother on a near-dead server
 
 async function distillGlossary(guildId) {
   const buf = messageBuffer.get(guildId) || [];
-  if (buf.length < MIN_MESSAGES_TO_DISTILL) return;
+  if (buf.length < MIN_MESSAGES_TO_DISTILL) {
+    console.log(
+      `[glossary] guild ${guildId}: skipping (${buf.length}/${MIN_MESSAGES_TO_DISTILL} messages buffered)`
+    );
+    return;
+  }
+  console.log(`[glossary] guild ${guildId}: distilling from ${buf.length} buffered messages`);
 
   const existing = getGlossary(guildId) || '(none yet)';
   const transcript = buf
@@ -235,8 +241,10 @@ async function askClaude(guildId, channelId, userId, displayName, userText, memb
       "defaulting to generic, overly helpful phrasing. Keep replies short and casual, the way people " +
       "actually type in Discord — most real chat messages are a sentence or two, not paragraphs. " +
       "Each user message is prefixed with '[Name]:' so you know who's speaking — track that, and refer to " +
-      "people by name when relevant. Only respond to the SINGLE most recent message, even if others appear " +
-      "unanswered in history. Don't include the '[Name]:' prefix in your own replies. " +
+      "people by name when relevant. If a message includes a '[Replying to X's message: \"...\"]' block, " +
+      "that's quoted context from a message the person replied to (not something they said themselves) — " +
+      "use it to understand what they're reacting to. Only respond to the SINGLE most recent message, even " +
+      "if others appear unanswered in history. Don't include the '[Name]:' prefix in your own replies. " +
       "You have a web_search tool — use it for anything current or time-sensitive; don't mention it by name. " +
       "Content guidelines (override everything else, always): this server may include minors. Never engage " +
       "in sexual/suggestive content or respond to sexual propositions, even as a joke or in the server's " +
@@ -415,17 +423,31 @@ client.on('messageCreate', async (message) => {
   }
 
   const isMention = client.user && message.mentions.has(client.user);
-  const isReplyToBot =
-    message.reference &&
-    (await message.fetchReference().catch(() => null))?.author?.id === client.user.id;
+
+  // Fetch the referenced message once (used for both "is this a reply to the
+  // bot" and, more generally, pulling in quoted context below).
+  const referencedMessage = message.reference
+    ? await message.fetchReference().catch(() => null)
+    : null;
+  const isReplyToBot = referencedMessage?.author?.id === client.user.id;
   const isDM = message.channel.type === 1;
 
   // Only actively respond to: @mentions, replies to the bot, or DMs
   if (!isMention && !isReplyToBot && !isDM) return;
 
-  const cleanedContent = message.content
+  let cleanedContent = message.content
     .replace(new RegExp(`<@!?${client.user.id}>`, 'g'), '')
     .trim();
+
+  // If this message is a reply to someone ELSE's message (e.g. you reply to
+  // a friend's message and ping the bot), pull that original message in as
+  // quoted context so the bot actually sees what you're reacting to.
+  if (referencedMessage && !isReplyToBot && referencedMessage.content?.trim()) {
+    const quotedAuthor =
+      referencedMessage.member?.displayName || referencedMessage.author?.username || 'someone';
+    const quoted = `[Replying to ${quotedAuthor}'s message: "${referencedMessage.content.trim()}"]\n`;
+    cleanedContent = cleanedContent ? quoted + cleanedContent : quoted.trim();
+  }
 
   if (!cleanedContent) {
     await safeReply(message, "yeah?");
